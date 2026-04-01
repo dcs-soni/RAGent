@@ -1,0 +1,51 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend.Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount data dirs so documents and vector store persist across restarts
+      - ./docs:/app/docs
+      - ./chroma_db:/app/chroma_db
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend.Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

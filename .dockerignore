@@ -1,0 +1,49 @@
+# ── Build & runtime ignores for Docker ────────────────────────────
+# Prevents secrets, dev artifacts, and data from being copied into images
+
+# Secrets — NEVER bake into images
+.env
+*.env
+
+# Git
+.git
+.gitignore
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Data directories (mounted as volumes at runtime, not baked in)
+chroma_db/
+docs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.Dockerfile
+docker-compose.yml
+
+# Documentation (not needed at runtime)
+THINKING.md
+README.md
+
+# Evaluation artifacts
+eval_results.csv
+test_dataset.json
