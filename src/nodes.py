@@ -48,6 +48,13 @@ def _get_retriever():
         _retriever = get_retriever(_vector_store)
     return _retriever
 
+
+def reset_retriever_cache() -> None:
+    """Clear cached vector store state after ingestion rebuilds the index."""
+    global _vector_store, _retriever
+    _vector_store = None
+    _retriever = None
+
 def retrieve(state: GraphState) -> dict:
     """
     Retrieve documents from the vector store based on the user's question.
@@ -133,49 +140,29 @@ def generate(state: GraphState) -> dict:
 
     logger.info("🤖 GENERATE: Answering with %d documents (attempt %d)", len(documents), retry_count + 1)
 
-    # Format documents with source attribution
+    # Format documents with source attribution.
     formatted_docs = "\n\n---\n\n".join(
         f"[Source: {doc.metadata.get('source_file', 'unknown')}, "
         f"Page: {doc.metadata.get('page', 'N/A')}]\n{doc.page_content}"
         for doc in documents
-    )
+    ) or "No source documents are available."
 
     prompt_text = (
         "You are a helpful assistant that answers questions based on the provided source documents.\n\n"
         "Rules:\n"
-        "1. Primarily use information from the provided documents.\n"
-        "2. If the documents don't contain enough information to answer, you may use the web_search tool to find missing facts.\n"
-        "3. Cite which source document or web search your answer comes from.\n"
-        "4. Be concise but thorough.\n"
+        "1. Use only the provided source documents.\n"
+        "2. If the documents do not contain enough information, explicitly say so.\n"
+        "3. Cite the source document names you relied on.\n"
+        "4. Do not invent facts, references, or citations.\n"
         "5. Use markdown formatting for readability.\n\n"
         f"Source Documents:\n{formatted_docs}\n\n"
-        f"Question: {question}"
+        f"Question: {question}\n\n"
+        "Answer:"
     )
 
     llm = get_llm(temperature=0.3)
-    search_tool = DuckDuckGoSearchResults(name="web_search", num_results=2)
-    llm_with_tools = llm.bind_tools([search_tool])
-    
-    response = llm_with_tools.invoke(prompt_text)
-    
-    generation_text = ""
-    if response.tool_calls:
-        logger.info("  🛠️ LLM decided to use tool: %s", response.tool_calls[0]['name'])
-        # Execute tool inline
-        tool_query = response.tool_calls[0]['args'].get('query', question)
-        try:
-            tool_result = search_tool.invoke(tool_query)
-            logger.info("  → Tool returned %d chars", len(tool_result))
-            
-            # Second pass generation with tool results
-            second_prompt = prompt_text + f"\n\nWeb Search Results:\n{tool_result}\n\nFinal Answer:"
-            final_response = llm.invoke(second_prompt)
-            generation_text = final_response.content
-        except Exception as e:
-            logger.warning("Tool execution failed: %s", e)
-            generation_text = "Sorry, I could not retrieve the necessary information."
-    else:
-        generation_text = response.content
+    response = llm.invoke(prompt_text)
+    generation_text = response.content if isinstance(response.content, str) else str(response.content)
 
     logger.info("  → Generated %d chars", len(generation_text))
     return {
@@ -241,6 +228,21 @@ def web_search(state: GraphState) -> dict:
     """
     question = state["question"]
     logger.info("🌐 WEB SEARCH: Falling back to web for '%s'", question[:80])
+
+    if not settings.ENABLE_WEB_SEARCH:
+        logger.info("  → External web search is disabled by configuration")
+        return {
+            "documents": [
+                Document(
+                    page_content=(
+                        "External web search is disabled for this deployment. "
+                        "Answer only from the uploaded documents."
+                    ),
+                    metadata={"source_file": "system_policy", "page": "N/A"},
+                )
+            ],
+            "web_search_needed": False,
+        }
 
     try:
         search_tool = DuckDuckGoSearchResults(num_results=3)

@@ -74,6 +74,7 @@ def get_llm(temperature: float = 0.0) -> ChatGoogleGenerativeAI:
         temperature: Controls randomness. 0.0 for grading (deterministic),
                      0.3-0.7 for generation (creative).
     """
+    settings.require_google_api_key()
     return ChatGoogleGenerativeAI(
         model=settings.LLM_MODEL,
         google_api_key=settings.GOOGLE_API_KEY,

@@ -25,6 +25,7 @@ import json
 import streamlit as st
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+HTTP_TIMEOUT_SECONDS = float(os.getenv("HTTP_TIMEOUT_SECONDS", "30"))
 
 
 logging.basicConfig(
@@ -105,12 +106,17 @@ def render_sidebar():
             help="Upload one or more PDF files to build the knowledge base.",
         )
 
-        if uploaded_files:
+        if uploaded_files and st.button("⬆️ Upload Selected Files", use_container_width=True):
             try:
                 for uploaded_file in uploaded_files:
                     files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
-                    res = requests.post(f"{BACKEND_URL}/upload", files=files)
+                    res = requests.post(
+                        f"{BACKEND_URL}/upload",
+                        files=files,
+                        timeout=HTTP_TIMEOUT_SECONDS,
+                    )
                     res.raise_for_status()
+                st.session_state.docs_ingested = False
                 st.success(f"✅ {len(uploaded_files)} file(s) uploaded to backend")
             except Exception as e:
                 st.error(f"❌ Upload failed: {e}")
@@ -118,7 +124,10 @@ def render_sidebar():
         if st.button("🔄 Ingest Documents", use_container_width=True, type="primary"):
             with st.spinner("Processing documents in background..."):
                 try:
-                    res = requests.post(f"{BACKEND_URL}/ingest")
+                    res = requests.post(
+                        f"{BACKEND_URL}/ingest",
+                        timeout=HTTP_TIMEOUT_SECONDS,
+                    )
                     res.raise_for_status()
                     st.session_state.docs_ingested = True
                     st.success("✅ Documents ingestion started on the backend!")
@@ -129,7 +138,12 @@ def render_sidebar():
         st.markdown("## 📊 System Status")
 
         try:
-            health = requests.get(f"{BACKEND_URL}/health").json()
+            health_response = requests.get(
+                f"{BACKEND_URL}/health",
+                timeout=HTTP_TIMEOUT_SECONDS,
+            )
+            health_response.raise_for_status()
+            health = health_response.json()
             if health.get("status") == "ok":
                 st.markdown("🟢 **Backend Engine:** Ready")
             else:
@@ -166,7 +180,12 @@ def stream_graph_response(question: str):
             "question": question,
             "thread_id": st.session_state.thread_id
         }
-        with requests.post(f"{BACKEND_URL}/chat", json=payload, stream=True) as response:
+        with requests.post(
+            f"{BACKEND_URL}/chat",
+            json=payload,
+            stream=True,
+            timeout=(5, HTTP_TIMEOUT_SECONDS),
+        ) as response:
             response.raise_for_status()
             for line in response.iter_lines():
                 if line:
