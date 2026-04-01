@@ -27,6 +27,8 @@ Developer Thinking:
 """
 
 import logging
+import shutil
+import time
 from pathlib import Path
 
 from langchain_chroma import Chroma
@@ -35,7 +37,6 @@ from langchain_core.documents import Document
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import time
 
 from src.config import settings
 
@@ -88,6 +89,12 @@ def load_documents(docs_dir: str | Path | None = None) -> list[Document]:
         except Exception:
             logger.exception("Failed to load %s, skipping", pdf_file.name)
 
+    if not all_documents:
+        raise ValueError(
+            f"No readable PDF content found in {docs_path}. "
+            "Check that the uploaded PDFs are valid and not encrypted."
+        )
+
     logger.info("Total documents loaded: %d pages from %d files", len(all_documents), len(pdf_files))
     return all_documents
 
@@ -133,6 +140,7 @@ def apply_contextual_chunking(chunks: list[Document], all_documents: list[Docume
     within the overall context of its source document.
     """
     logger.info("Applying Contextual Chunking via LLM... (This takes a moment)")
+    settings.require_google_api_key()
     
     # Truncate document text to stay within LLM context window.
     # Gemini Flash supports ~1M tokens, but sending full books is slow and costly.
@@ -192,6 +200,7 @@ def apply_contextual_chunking(chunks: list[Document], all_documents: list[Docume
 
 def get_embeddings() -> GoogleGenerativeAIEmbeddings:
     """Create the embedding model instance."""
+    settings.require_google_api_key()
     return GoogleGenerativeAIEmbeddings(
         model=settings.EMBEDDING_MODEL,
         google_api_key=settings.GOOGLE_API_KEY,
@@ -202,8 +211,8 @@ def create_vector_store(chunks: list[Document]) -> Chroma:
     """
     Create a ChromaDB vector store from document chunks.
 
-    If the store already exists on disk, this will ADD new documents to it.
-    In production, you'd implement deduplication here.
+    The index is rebuilt into a temporary directory and then swapped into
+    place, so repeated ingestion does not accumulate duplicate vectors.
 
     Args:
         chunks: Pre-split document chunks.
@@ -213,11 +222,29 @@ def create_vector_store(chunks: list[Document]) -> Chroma:
     """
     embeddings = get_embeddings()
 
-    logger.info("Creating vector store at: %s", settings.chroma_path)
-    vector_store = Chroma.from_documents(
+    target_path = settings.chroma_path
+    temp_path = target_path.parent / f"{target_path.name}.tmp"
+    backup_path = target_path.parent / f"{target_path.name}.bak"
+
+    logger.info("Creating vector store at: %s", target_path)
+    shutil.rmtree(temp_path, ignore_errors=True)
+    shutil.rmtree(backup_path, ignore_errors=True)
+
+    Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,
-        persist_directory=str(settings.chroma_path),
+        persist_directory=str(temp_path),
+        collection_name="rag_documents",
+    )
+
+    if target_path.exists():
+        target_path.replace(backup_path)
+    temp_path.replace(target_path)
+    shutil.rmtree(backup_path, ignore_errors=True)
+
+    vector_store = Chroma(
+        persist_directory=str(target_path),
+        embedding_function=embeddings,
         collection_name="rag_documents",
     )
     logger.info("Vector store created with %d chunks", len(chunks))
@@ -276,7 +303,6 @@ def ingest_pipeline(docs_dir: str | Path | None = None) -> Chroma:
     enriched_chunks = apply_contextual_chunking(raw_chunks, documents)
     vector_store = create_vector_store(enriched_chunks)
 
-    logger.info("=" * 60)
     logger.info("INGESTION COMPLETE — %d chunks indexed", len(enriched_chunks))
     logger.info("=" * 60)
     return vector_store
