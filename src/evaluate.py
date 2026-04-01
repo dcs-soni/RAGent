@@ -33,39 +33,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def run_evaluation(questions_file: str = "test_dataset.json"):
+def run_evaluation(
+    questions_file: str = "test_dataset.json",
+    output_file: str = "eval_results.csv",
+):
     """
     Run RAGAS evaluation on a test dataset.
     The dataset should be a JSON array of dicts with 'question' and 'ground_truth'.
     """
     filepath = Path(questions_file)
     if not filepath.exists():
-        logger.error("Test dataset '%s' not found.", questions_file)
-        logger.info(
-            "Create a JSON file like: "
-            '[{"question": "What is RAG?", "ground_truth": "Retrieval-Augmented Generation."}]'
+        raise FileNotFoundError(
+            f"Test dataset '{questions_file}' not found. "
+            "Create a JSON array with 'question' and optional 'ground_truth' fields."
         )
-        # Create a dummy one for testing
-        dummy_data = [
-            {
-                "question": "How does the system handle hallucinations?",
-                "ground_truth": (
-                    "The graph uses a specific hallucination check node that verifies if "
-                    "the generation is grounded purely in the retrieved context. If not, it "
-                    "increments the retry count and attempts generation again."
-                ),
-            },
-            {
-                "question": "What happens if there are no local documents?",
-                "ground_truth": (
-                    "The self-correction logic sets a flag causing the graph to "
-                    "fallback to a web search node."
-                ),
-            },
-        ]
-        with open(filepath, "w") as f:
-            json.dump(dummy_data, f, indent=4)
-        logger.info("Created a sample '%s'. Running evaluation on it...", questions_file)
 
     with open(filepath, "r") as f:
         qa_pairs = json.load(f)
@@ -119,6 +100,7 @@ def run_evaluation(questions_file: str = "test_dataset.json"):
     })
 
     # Initialize RAGAS evaluator models using Google GenAI APIs
+    settings.require_google_api_key()
     ragas_llm = ChatGoogleGenerativeAI(
         model=settings.LLM_MODEL, google_api_key=settings.GOOGLE_API_KEY
     )
@@ -145,8 +127,8 @@ def run_evaluation(questions_file: str = "test_dataset.json"):
     # Save results
     try:
         res_df = result.to_pandas()
-        res_df.to_csv("eval_results.csv", index=False)
-        logger.info("Detailed results saved to eval_results.csv")
+        res_df.to_csv(output_file, index=False)
+        logger.info("Detailed results saved to %s", output_file)
     except Exception as e:
         logger.warning("Could not save to CSV: %s", e)
 
