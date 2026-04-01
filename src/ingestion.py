@@ -30,6 +30,7 @@ import logging
 import shutil
 import time
 from pathlib import Path
+from typing import Callable
 
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyPDFLoader
@@ -39,11 +40,21 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src.config import settings
+from src.document_store import get_active_document_paths, mark_indexed
 
 logger = logging.getLogger(__name__)
 
+ProgressCallback = Callable[[dict], None]
 
-def load_documents(docs_dir: str | Path | None = None) -> list[Document]:
+
+def _report_progress(progress_callback: ProgressCallback | None, **payload: object) -> None:
+    if progress_callback is not None:
+        progress_callback(payload)
+
+
+def load_documents(
+    docs_dir: str | Path | None = None,
+) -> tuple[list[Document], list[str], int]:
     """
     Load all PDFs from the given directory.
 
@@ -51,52 +62,75 @@ def load_documents(docs_dir: str | Path | None = None) -> list[Document]:
         docs_dir: Path to folder containing PDFs. Defaults to settings.DOCS_DIR.
 
     Returns:
-        List of LangChain Document objects, one per page.
+        Tuple of page-level LangChain documents, stable document IDs, and the
+        total number of source files loaded.
 
     Raises:
         FileNotFoundError: If the directory doesn't exist.
         ValueError: If no PDFs are found.
     """
-    docs_path = Path(docs_dir).resolve() if docs_dir else settings.docs_path
+    if docs_dir:
+        docs_path = Path(docs_dir).resolve()
+        if not docs_path.exists():
+            raise FileNotFoundError(
+                f"Documents directory not found: {docs_path}. "
+                f"Create it and add your PDF files."
+            )
+        source_entries = [
+            {
+                "document_id": pdf_file.stem,
+                "display_name": pdf_file.name,
+                "path": pdf_file,
+            }
+            for pdf_file in sorted(docs_path.glob("*.pdf"))
+        ]
+    else:
+        source_entries = [
+            {
+                "document_id": record.document_id,
+                "display_name": record.original_filename,
+                "path": file_path,
+            }
+            for record, file_path in get_active_document_paths()
+        ]
 
-    if not docs_path.exists():
-        raise FileNotFoundError(
-            f"Documents directory not found: {docs_path}. "
-            f"Create it and add your PDF files."
-        )
-
-    pdf_files = sorted(docs_path.glob("*.pdf"))
-    if not pdf_files:
+    if not source_entries:
         raise ValueError(
-            f"No PDF files found in {docs_path}. "
-            f"Add at least one .pdf file to get started."
+            "No active PDF documents found. Upload documents before running ingestion."
         )
 
     all_documents: list[Document] = []
+    document_ids: list[str] = []
 
-    for pdf_file in pdf_files:
-        logger.info("Loading: %s", pdf_file.name)
+    for entry in source_entries:
+        pdf_file = entry["path"]
+        display_name = entry["display_name"]
+        document_id = entry["document_id"]
+        logger.info("Loading: %s", display_name)
         try:
             loader = PyPDFLoader(str(pdf_file))
             pages = loader.load()
 
             # Enrich metadata so we can trace answers back to source files
             for page in pages:
-                page.metadata["source_file"] = pdf_file.name
+                page.metadata["source_file"] = display_name
+                page.metadata["document_id"] = document_id
 
             all_documents.extend(pages)
             logger.info("  → %d pages loaded", len(pages))
+            document_ids.append(document_id)
         except Exception:
-            logger.exception("Failed to load %s, skipping", pdf_file.name)
+            logger.exception("Failed to load %s, skipping", display_name)
 
     if not all_documents:
-        raise ValueError(
-            f"No readable PDF content found in {docs_path}. "
-            "Check that the uploaded PDFs are valid and not encrypted."
-        )
+        raise ValueError("No readable PDF content found. Check that the documents are valid and not encrypted.")
 
-    logger.info("Total documents loaded: %d pages from %d files", len(all_documents), len(pdf_files))
-    return all_documents
+    logger.info(
+        "Total documents loaded: %d pages from %d files",
+        len(all_documents),
+        len(document_ids),
+    )
+    return all_documents, document_ids, len(source_entries)
 
 
 
@@ -134,7 +168,12 @@ def split_documents(documents: list[Document]) -> list[Document]:
 
 
 
-def apply_contextual_chunking(chunks: list[Document], all_documents: list[Document]) -> list[Document]:
+def apply_contextual_chunking(
+    chunks: list[Document],
+    all_documents: list[Document],
+    progress_callback: ProgressCallback | None = None,
+    total_documents: int = 0,
+) -> list[Document]:
     """
     Applies Contextual Chunking by asking the LLM to situate each chunk
     within the overall context of its source document.
@@ -191,7 +230,16 @@ def apply_contextual_chunking(chunks: list[Document], all_documents: list[Docume
         except Exception as e:
             logger.warning("Failed to contextualize chunk %d: %s", i, e)
             enriched_chunks.append(chunk)
-            
+
+        _report_progress(
+            progress_callback,
+            stage="contextualizing",
+            message=f"Contextualized chunk {i + 1} of {len(chunks)}",
+            total_documents=total_documents,
+            processed_documents=total_documents if total_documents else 0,
+            total_chunks=len(chunks),
+            processed_chunks=i + 1,
+        )
         time.sleep(0.5)  # Throttle to respect free-tier API rate limits
         
     logger.info("Contextual Chunking Complete: Enriched %d chunks", len(enriched_chunks))
@@ -284,7 +332,10 @@ def load_vector_store() -> Chroma:
 
 
 
-def ingest_pipeline(docs_dir: str | Path | None = None) -> Chroma:
+def ingest_pipeline(
+    docs_dir: str | Path | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> Chroma:
     """
     Run the full ingestion pipeline: Load → Split → Embed → Store.
 
@@ -298,11 +349,75 @@ def ingest_pipeline(docs_dir: str | Path | None = None) -> Chroma:
     logger.info("STARTING INGESTION PIPELINE")
     logger.info("=" * 60)
 
-    documents = load_documents(docs_dir)
+    _report_progress(
+        progress_callback,
+        stage="loading",
+        message="Loading documents",
+        total_documents=0,
+        processed_documents=0,
+        total_chunks=0,
+        processed_chunks=0,
+    )
+    documents, document_ids, total_documents = load_documents(docs_dir)
+    _report_progress(
+        progress_callback,
+        stage="loaded",
+        message=f"Loaded {total_documents} documents",
+        total_documents=total_documents,
+        processed_documents=total_documents,
+        total_chunks=0,
+        processed_chunks=0,
+    )
+
+    _report_progress(
+        progress_callback,
+        stage="splitting",
+        message="Splitting documents into chunks",
+        total_documents=total_documents,
+        processed_documents=total_documents,
+        total_chunks=0,
+        processed_chunks=0,
+    )
     raw_chunks = split_documents(documents)
-    enriched_chunks = apply_contextual_chunking(raw_chunks, documents)
+    _report_progress(
+        progress_callback,
+        stage="split_complete",
+        message=f"Created {len(raw_chunks)} raw chunks",
+        total_documents=total_documents,
+        processed_documents=total_documents,
+        total_chunks=len(raw_chunks),
+        processed_chunks=0,
+    )
+
+    enriched_chunks = apply_contextual_chunking(
+        raw_chunks,
+        documents,
+        progress_callback=progress_callback,
+        total_documents=total_documents,
+    )
+    _report_progress(
+        progress_callback,
+        stage="indexing",
+        message="Writing vectors to ChromaDB",
+        total_documents=total_documents,
+        processed_documents=total_documents,
+        total_chunks=len(enriched_chunks),
+        processed_chunks=len(enriched_chunks),
+    )
     vector_store = create_vector_store(enriched_chunks)
+
+    if docs_dir is None:
+        mark_indexed(document_ids)
 
     logger.info("INGESTION COMPLETE — %d chunks indexed", len(enriched_chunks))
     logger.info("=" * 60)
+    _report_progress(
+        progress_callback,
+        stage="completed",
+        message=f"Indexed {len(enriched_chunks)} chunks from {total_documents} documents",
+        total_documents=total_documents,
+        processed_documents=total_documents,
+        total_chunks=len(enriched_chunks),
+        processed_chunks=len(enriched_chunks),
+    )
     return vector_store

@@ -44,6 +44,7 @@ class Settings(BaseSettings):
 
     DOCS_DIR: str = "docs"
     CHROMA_DB_DIR: str = "chroma_db"
+    DOCUMENT_REGISTRY_FILENAME: str = ".documents.json"
     BACKEND_CORS_ORIGINS: list[str] = [
         "http://localhost:8501",
         "http://127.0.0.1:8501",
@@ -100,6 +101,11 @@ class Settings(BaseSettings):
     def chroma_path(self) -> Path:
         """Resolved absolute path to the ChromaDB directory."""
         return Path(self.CHROMA_DB_DIR).resolve()
+
+    @property
+    def document_registry_path(self) -> Path:
+        """Registry file that tracks stable document IDs and ingestion state."""
+        return self.docs_path / self.DOCUMENT_REGISTRY_FILENAME
 
     @property
     def max_upload_size_bytes(self) -> int:
