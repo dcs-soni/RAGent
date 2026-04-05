@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     ENABLE_WEB_SEARCH: bool = False
     MAX_UPLOAD_SIZE_MB: int = 25
     MAX_FILENAME_LENGTH: int = 128
+    MAX_UPLOAD_REQUEST_OVERHEAD_KB: int = 256
+    UPLOAD_READ_CHUNK_SIZE_KB: int = 256
+    MAX_CHAT_REQUEST_SIZE_KB: int = 16
+    CHAT_RATE_LIMIT_REQUESTS: int = 10
+    CHAT_RATE_LIMIT_WINDOW_SECONDS: int = 60
+    DOCUMENT_WRITE_RATE_LIMIT_REQUESTS: int = 10
+    DOCUMENT_WRITE_RATE_LIMIT_WINDOW_SECONDS: int = 60
+    INGEST_RATE_LIMIT_REQUESTS: int = 3
+    INGEST_RATE_LIMIT_WINDOW_SECONDS: int = 300
 
     DOCS_DIR: str = "docs"
     CHROMA_DB_DIR: str = "chroma_db"
@@ -63,6 +72,15 @@ class Settings(BaseSettings):
         "HTTP_TIMEOUT_SECONDS",
         "MAX_UPLOAD_SIZE_MB",
         "MAX_FILENAME_LENGTH",
+        "MAX_UPLOAD_REQUEST_OVERHEAD_KB",
+        "UPLOAD_READ_CHUNK_SIZE_KB",
+        "MAX_CHAT_REQUEST_SIZE_KB",
+        "CHAT_RATE_LIMIT_REQUESTS",
+        "CHAT_RATE_LIMIT_WINDOW_SECONDS",
+        "DOCUMENT_WRITE_RATE_LIMIT_REQUESTS",
+        "DOCUMENT_WRITE_RATE_LIMIT_WINDOW_SECONDS",
+        "INGEST_RATE_LIMIT_REQUESTS",
+        "INGEST_RATE_LIMIT_WINDOW_SECONDS",
     )
     @classmethod
     def validate_positive_ints(cls, value: int) -> int:
@@ -112,6 +130,19 @@ class Settings(BaseSettings):
     def max_upload_size_bytes(self) -> int:
         """Upload limit converted from megabytes to bytes."""
         return self.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+    @property
+    def max_upload_request_bytes(self) -> int:
+        """Upload body limit with room for multipart form overhead."""
+        return self.max_upload_size_bytes + (self.MAX_UPLOAD_REQUEST_OVERHEAD_KB * 1024)
+
+    @property
+    def upload_read_chunk_size_bytes(self) -> int:
+        return self.UPLOAD_READ_CHUNK_SIZE_KB * 1024
+
+    @property
+    def max_chat_request_bytes(self) -> int:
+        return self.MAX_CHAT_REQUEST_SIZE_KB * 1024
 
 
 settings = Settings()
