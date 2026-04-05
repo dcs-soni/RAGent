@@ -25,6 +25,7 @@ import json
 import streamlit as st
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+API_KEY = os.environ["API_KEY"]
 HTTP_TIMEOUT_SECONDS = float(os.getenv("HTTP_TIMEOUT_SECONDS", "30"))
 
 
@@ -104,9 +105,12 @@ def _extract_error_message(response: requests.Response) -> str:
 
 
 def api_request(method: str, path: str, **kwargs):
+    headers = kwargs.pop("headers", {})
+    headers["Authorization"] = f"Bearer {API_KEY}"
     response = requests.request(
         method,
         f"{BACKEND_URL}{path}",
+        headers=headers,
         timeout=kwargs.pop("timeout", HTTP_TIMEOUT_SECONDS),
         **kwargs,
     )
@@ -300,6 +304,7 @@ def stream_graph_response(question: str):
         }
         with requests.post(
             f"{BACKEND_URL}/chat",
+            headers={"Authorization": f"Bearer {API_KEY}"},
             json=payload,
             stream=True,
             timeout=(5, HTTP_TIMEOUT_SECONDS),

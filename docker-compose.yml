@@ -33,6 +33,7 @@ services:
       - "8501:8501"
     environment:
       - BACKEND_URL=http://backend:8000
+      - API_KEY=${API_KEY}
     depends_on:
       backend:
         condition: service_healthy

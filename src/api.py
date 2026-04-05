@@ -12,9 +12,10 @@ from threading import Lock
 from typing import AsyncGenerator
 from pathlib import Path
 
-from fastapi import FastAPI, BackgroundTasks, File, UploadFile, HTTPException
+from fastapi import FastAPI, BackgroundTasks, File, UploadFile, HTTPException, Depends, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
 
 from src.config import settings
@@ -30,6 +31,16 @@ from src.ingestion_jobs import job_tracker
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+security = HTTPBearer()
+
+def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(security)):
+    if credentials.credentials != settings.API_KEY:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid or missing API Key",
+        )
+    return credentials.credentials
 
 MAX_QUESTION_LENGTH = 2000  # characters
 ALLOWED_EXTENSIONS = {".pdf"}
@@ -172,12 +183,27 @@ def health_check():
     return {
         "status": status,
         "graph_ready": _graph is not None and not registry.needs_reindex,
+    }
+
+@app.get("/system/status", dependencies=[Depends(verify_api_key)])
+def system_status_endpoint():
+    registry = get_registry_summary()
+    status = "ok"
+    if registry.active_documents == 0:
+        status = "no_documents"
+    elif not settings.chroma_path.exists() or registry.indexed_content_version == 0:
+        status = "no_vector_db"
+    elif registry.needs_reindex:
+        status = "stale_index"
+    return {
+        "status": status,
+        "graph_ready": _graph is not None and not registry.needs_reindex,
         "documents": registry.model_dump(mode="json"),
         "ingestion": _latest_job_response().model_dump(mode="json"),
     }
 
 
-@app.get("/documents")
+@app.get("/documents", dependencies=[Depends(verify_api_key)])
 def list_documents_endpoint():
     registry = get_registry_summary()
     return {
@@ -186,7 +212,7 @@ def list_documents_endpoint():
     }
 
 
-@app.post("/documents")
+@app.post("/documents", dependencies=[Depends(verify_api_key)])
 async def create_document_endpoint(file: UploadFile = File(...)):
     """Create a new managed document with a stable ID."""
     try:
@@ -206,13 +232,13 @@ async def create_document_endpoint(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail="Document upload failed")
 
 
-@app.post("/upload")
+@app.post("/upload", dependencies=[Depends(verify_api_key)])
 async def upload_file(file: UploadFile = File(...)):
     """Backward-compatible alias for document creation."""
     return await create_document_endpoint(file)
 
 
-@app.put("/documents/{document_id}")
+@app.put("/documents/{document_id}", dependencies=[Depends(verify_api_key)])
 async def update_document_endpoint(document_id: str, file: UploadFile = File(...)):
     """Replace an existing document while preserving its stable ID."""
     try:
@@ -237,7 +263,7 @@ async def update_document_endpoint(document_id: str, file: UploadFile = File(...
         raise HTTPException(status_code=500, detail="Document update failed")
 
 
-@app.delete("/documents/{document_id}")
+@app.delete("/documents/{document_id}", dependencies=[Depends(verify_api_key)])
 def delete_document_endpoint(document_id: str):
     """Delete an existing document and mark the index as stale."""
     try:
@@ -253,7 +279,7 @@ def delete_document_endpoint(document_id: str):
         raise HTTPException(status_code=500, detail="Document delete failed")
 
 
-@app.post("/ingest")
+@app.post("/ingest", dependencies=[Depends(verify_api_key)])
 async def ingest_endpoint(background_tasks: BackgroundTasks):
     """Triggers the ingestion pipeline in the background."""
     global _graph, _ingestion_running
@@ -320,12 +346,12 @@ async def ingest_endpoint(background_tasks: BackgroundTasks):
         raise HTTPException(status_code=500, detail="Ingestion trigger failed")
 
 
-@app.get("/ingest/status")
+@app.get("/ingest/status", dependencies=[Depends(verify_api_key)])
 def ingest_status_endpoint():
     return _latest_job_response().model_dump(mode="json")
 
 
-@app.get("/ingest/jobs/{job_id}")
+@app.get("/ingest/jobs/{job_id}", dependencies=[Depends(verify_api_key)])
 def ingest_job_endpoint(job_id: str):
     job = job_tracker.get_job(job_id)
     if job is None:
@@ -333,7 +359,7 @@ def ingest_job_endpoint(job_id: str):
     return job.to_response()
 
 
-@app.post("/chat")
+@app.post("/chat", dependencies=[Depends(verify_api_key)])
 async def chat_endpoint(request: ChatRequest):
     """Stream state updates using LangGraph async stream via SSE."""
     registry = get_registry_summary()
