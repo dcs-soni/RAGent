@@ -25,8 +25,15 @@ import json
 import streamlit as st
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
-API_KEY = os.environ["API_KEY"]
 HTTP_TIMEOUT_SECONDS = float(os.getenv("HTTP_TIMEOUT_SECONDS", "30"))
+
+API_KEY = os.environ.get("API_KEY")
+if not API_KEY:
+    st.error(
+        "⛔ **Configuration Error:** The `API_KEY` environment variable is not set. "
+        "Please set it before starting the application."
+    )
+    st.stop()
 
 
 logging.basicConfig(
@@ -83,8 +90,6 @@ def init_session_state():
     """Initialize all session state variables on first run."""
     if "messages" not in st.session_state:
         st.session_state.messages = []
-    if "graph" not in st.session_state:
-        st.session_state.graph = None
     if "trace_log" not in st.session_state:
         st.session_state.trace_log = []
     if "docs_ingested" not in st.session_state:

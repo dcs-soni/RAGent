@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 from threading import Lock
 
 from pydantic import BaseModel
 
-
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from src.utils import utc_now_iso
 
 
 class IngestionJob(BaseModel):

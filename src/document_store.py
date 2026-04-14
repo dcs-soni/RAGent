@@ -4,21 +4,16 @@ import hashlib
 import json
 import os
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
 from pydantic import BaseModel, Field
 
 from src.config import settings
+from src.utils import utc_now_iso
 
 
 _registry_lock = Lock()
-
-
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
 
 class DocumentRecord(BaseModel):
     document_id: str
