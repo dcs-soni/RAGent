@@ -5,8 +5,11 @@ Decouples the LangGraph execution from the Streamlit UI,
 exposing a Server-Sent Events (SSE) streaming /chat endpoint.
 """
 
+import hashlib
+import hmac
 import logging
 import json
+import os
 from contextlib import asynccontextmanager
 from threading import Lock
 from typing import AsyncGenerator
@@ -36,12 +39,23 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer()
 
 def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(security)):
-    if credentials.credentials != settings.API_KEY:
+    if not hmac.compare_digest(credentials.credentials, settings.API_KEY):
         raise HTTPException(
             status_code=403,
             detail="Invalid or missing API Key",
         )
     return credentials.credentials
+
+
+def _scope_thread_id(api_key: str, thread_id: str) -> str:
+    """Namespace thread IDs by API key to prevent cross-tenant state leakage.
+
+    Each tenant (identified by API key) gets an isolated conversation namespace.
+    Even if two tenants use the same thread_id string, they will never collide
+    because the key hash prefix makes them unique.
+    """
+    key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:16]
+    return f"{key_hash}:{thread_id}"
 
 MAX_QUESTION_LENGTH = 2000  # characters
 ALLOWED_EXTENSIONS = {".pdf"}
@@ -67,18 +81,23 @@ async def lifespan(app: FastAPI):
     _graph = None
 
 
+_docs_enabled = os.getenv("DOCS_ENABLED", "false").lower() == "true"
+
 app = FastAPI(
     title="RAGent API",
     version="2.0.0",
     lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.BACKEND_CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -106,7 +125,12 @@ async def enforce_request_body_limits(request: Request, call_next):
 async def set_security_headers(request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'"
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 
 
@@ -500,8 +524,11 @@ def ingest_job_endpoint(job_id: str):
     return job.to_response()
 
 
-@app.post("/chat", dependencies=[Depends(verify_api_key), Depends(limit_chat_requests)])
-async def chat_endpoint(request: ChatRequest):
+@app.post("/chat", dependencies=[Depends(limit_chat_requests)])
+async def chat_endpoint(
+    request: ChatRequest,
+    api_key: str = Depends(verify_api_key),
+):
     """Stream state updates using LangGraph async stream via SSE."""
     registry = get_registry_summary()
     if registry.active_documents == 0:
@@ -520,6 +547,9 @@ async def chat_endpoint(request: ChatRequest):
             detail="Agent graph not available. Run document ingestion first.",
         )
 
+    # Scope thread_id by API key to prevent cross-tenant state leakage (SEC-03)
+    scoped_thread_id = _scope_thread_id(api_key, request.thread_id)
+
     async def event_generator() -> AsyncGenerator[str, None]:
         initial_state = {
             "question": request.question,
@@ -530,7 +560,7 @@ async def chat_endpoint(request: ChatRequest):
         }
 
         try:
-            config = {"configurable": {"thread_id": request.thread_id}}
+            config = {"configurable": {"thread_id": scoped_thread_id}}
             async for output in _graph.astream(initial_state, config=config):
                 for node_name, state_update in output.items():
                     event_data = {

@@ -1,25 +1,26 @@
-langchain>=0.3.0
-langchain-google-genai>=2.0.0
-langchain-chroma>=0.2.0
-langchain-community>=0.3.0
-langgraph>=0.2.0
+# Pinned production dependencies — regenerate with: pip freeze > requirements.txt
+langchain==0.3.25
+langchain-google-genai==2.1.4
+langchain-chroma==0.2.2
+langchain-community==0.3.24
+langgraph==0.2.70
 
-fastapi>=0.100.0
-uvicorn>=0.23.0
-python-multipart>=0.0.6
+fastapi==0.115.12
+uvicorn==0.34.2
+python-multipart==0.0.20
 
-chromadb>=0.5.0
-rank_bm25>=0.2.2
+chromadb==0.6.3
+rank_bm25==0.2.2
 
-pypdf>=4.0.0
+pypdf==5.4.0
 
-duckduckgo-search>=6.0.0
+duckduckgo-search==7.5.3
 
-streamlit>=1.38.0
+streamlit==1.44.1
 
-python-dotenv>=1.0.0
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
+python-dotenv==1.1.0
+pydantic==2.11.1
+pydantic-settings==2.9.1
 
-ragas>=0.1.0
-datasets>=2.0.0
+ragas==0.2.15
+datasets==3.5.0

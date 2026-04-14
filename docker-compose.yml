@@ -4,7 +4,8 @@ services:
       context: .
       dockerfile: backend.Dockerfile
     ports:
-      - "8000:8000"
+      # Bind to localhost only — use a reverse proxy (nginx/ALB) for public access
+      - "127.0.0.1:8000:8000"
     volumes:
       # Mount data dirs so documents and vector store persist across restarts
       - ./docs:/app/docs
@@ -12,6 +13,15 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          memory: 512M
     healthcheck:
       test:
         [
@@ -30,14 +40,25 @@ services:
       context: .
       dockerfile: frontend.Dockerfile
     ports:
-      - "8501:8501"
+      # Bind to localhost only — use a reverse proxy for public access
+      - "127.0.0.1:8501:8501"
+    env_file:
+      - .env
     environment:
       - BACKEND_URL=http://backend:8000
-      - API_KEY=${API_KEY}
     depends_on:
       backend:
         condition: service_healthy
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          memory: 128M
     healthcheck:
       test:
         [
