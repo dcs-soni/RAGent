@@ -7,6 +7,7 @@ exposing a Server-Sent Events (SSE) streaming /chat endpoint.
 
 import hashlib
 import hmac
+import io
 import logging
 import json
 import os
@@ -20,6 +21,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
 from src.config import settings
 from src.document_store import (
@@ -269,9 +272,20 @@ def _validate_pdf_upload_name(file: UploadFile) -> str:
     return safe_name
 
 
-def _validate_pdf_signature(content_prefix: bytes) -> None:
-    if PDF_MAGIC_BYTES not in content_prefix[:1024]:
+def _validate_pdf_content_safely(content: bytes) -> None:
+    if PDF_MAGIC_BYTES not in content[:1024]:
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid PDF")
+        
+    try:
+        reader = PdfReader(io.BytesIO(content), strict=True)
+        if len(reader.pages) == 0:
+            raise HTTPException(status_code=400, detail="PDF has no pages")
+    except PdfReadError as e:
+        logger.warning("Malformed or encrypted PDF upload attempt: %s", e)
+        raise HTTPException(status_code=400, detail="Malformed or corrupted PDF file")
+    except Exception:
+        logger.exception("Failed to parse PDF during validation")
+        raise HTTPException(status_code=500, detail="Error validating PDF file")
 
 
 async def _read_upload_content(request: Request, file: UploadFile) -> tuple[str, bytes]:
@@ -299,7 +313,7 @@ async def _read_upload_content(request: Request, file: UploadFile) -> tuple[str,
     finally:
         await file.close()
 
-    _validate_pdf_signature(bytes(content[:1024]))
+    _validate_pdf_content_safely(bytes(content))
     return safe_name, bytes(content)
 
 

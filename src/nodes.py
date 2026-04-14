@@ -20,6 +20,7 @@ Developer Thinking:
     4. OBSERVABILITY:  LangGraph traces show each node's execution time and output.
 """
 
+import html
 import logging
 
 from langchain_core.documents import Document
@@ -153,7 +154,7 @@ def generate(state: GraphState) -> dict:
         f"<source_document index=\"{i + 1}\" "
         f"file=\"{doc.metadata.get('source_file', 'unknown')}\" "
         f"page=\"{doc.metadata.get('page', 'N/A')}\">\n"
-        f"{doc.page_content}\n"
+        f"{html.escape(doc.page_content)}\n"
         f"</source_document>"
         for i, doc in enumerate(documents)
     ) or "No source documents are available."
